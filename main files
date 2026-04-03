@@ -1,0 +1,108 @@
+from transformers import pipeline
+from sentence_transformers import SentenceTransformer
+import faiss
+import numpy as np
+from langdetect import detect
+import pytesseract
+from PIL import Image
+import gradio as gr
+
+# Load models
+generator = pipeline("text-generation", model="distilgpt2")
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+# -------------------------------
+# 🌍 EXPANDED DATASET (sample + scalable)
+# -------------------------------
+data = []
+
+languages = [
+    ("Latin", "Europe", "700 BCE – 1500 CE", "Indo-European"),
+    ("Sanskrit", "India", "1500 BCE – present", "Indo-European"),
+    ("Akkadian", "Mesopotamia", "2500 BCE – 100 CE", "Semitic"),
+    ("Ancient Greek", "Greece", "800 BCE – 600 CE", "Indo-European"),
+    ("Old English", "England", "450–1150 CE", "Germanic"),
+]
+
+# Simulate scaling to 1000+
+for i in range(200):
+    for lang in languages:
+        data.append({
+            "language": lang[0],
+            "region": lang[1],
+            "period": lang[2],
+            "family": lang[3],
+            "info": f"{lang[0]} was used in {lang[1]} during {lang[2]}."
+        })
+
+# -------------------------------
+# 🔎 FAISS SEARCH
+# -------------------------------
+texts = [d["language"] + " " + d["info"] for d in data]
+embeddings = embedder.encode(texts)
+
+index = faiss.IndexFlatL2(embeddings.shape[1])
+index.add(np.array(embeddings))
+
+def search(query):
+    q = embedder.encode([query])
+    D, I = index.search(np.array(q), k=1)
+    return data[I[0][0]]
+
+# -------------------------------
+# 🧠 TEXT AI
+# -------------------------------
+def text_ai(user_input):
+    try:
+        detected = detect(user_input)
+    except:
+        detected = "unknown"
+
+    result = search(user_input)
+
+    prompt = f"""
+User: {user_input}
+
+Detected language code: {detected}
+
+Language: {result['language']}
+Region: {result['region']}
+Period: {result['period']}
+Family: {result['family']}
+
+Explain clearly like a helpful assistant:
+"""
+
+    output = generator(prompt, max_length=180)[0]['generated_text']
+    return output
+
+# -------------------------------
+# 🖼️ IMAGE → TEXT → AI
+# -------------------------------
+def image_ai(image):
+    text = pytesseract.image_to_string(Image.fromarray(image))
+    
+    if text.strip() == "":
+        return "No text detected."
+
+    return text_ai(text)
+
+# -------------------------------
+# 🌐 UI (CHATGPT STYLE)
+# -------------------------------
+with gr.Blocks() as app:
+    gr.Markdown("# 🌍 Ancient Language AI")
+    
+    with gr.Tab("💬 Text"):
+        txt_input = gr.Textbox(label="Ask anything")
+        txt_output = gr.Textbox()
+        txt_btn = gr.Button("Ask")
+        txt_btn.click(text_ai, inputs=txt_input, outputs=txt_output)
+
+    with gr.Tab("🖼️ Image"):
+        img_input = gr.Image()
+        img_output = gr.Textbox()
+        img_btn = gr.Button("Analyze Image")
+        img_btn.click(image_ai, inputs=img_input, outputs=img_output)
+
+app.launch()
